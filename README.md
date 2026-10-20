@@ -1,6 +1,6 @@
 # opencode-ultracode
 
-Code-driven multi-agent workflows for **OpenCode 2.x**, modelled on Claude Code's ultracode mode and its `Workflow`
+Code-driven multi-agent workflows for **OpenCode 2.x**, inspired by Claude Code's ultracode mode and its `Workflow`
 tool. The lead agent writes a short JavaScript program; the plugin runs it in the background, fans the work out to
 child sessions with a concurrency cap, checks every structured result against a JSON Schema, journals each result for
 resume, and posts a completion notice back into your session, which starts the lead's next turn.
@@ -144,3 +144,7 @@ line per other live-system MCP server you use). While an operator holds the lock
   journal with `{ scriptPath, resumeFromRunId }`).
 - The lead only sees a run's result when the notification arrives; `workflow_status` shows progress meanwhile.
 - `effort` maps to a model variant; variant names depend on the provider and model.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
