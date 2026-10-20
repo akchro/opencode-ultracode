@@ -20,6 +20,22 @@ parallel(thunks) (a barrier); pipeline(items, stage1, stage2, ...) (no barrier: 
 phase(title); log(msg); workflow(name, args) (one nesting level); args; budget. Date.now / Math.random throw.
 At most 6 agents run at once per run (configurable); the rest queue first come, first served.`
 
+/** A command's prompt: OpenCode 2.0.32 passes a draft object ({ text, files, agents, skills }), older builds a string.
+ *  Attachments are forwarded as they came. */
+export function commandPrompt(p: unknown): { text: string; attachments: Record<string, unknown> } {
+  if (typeof p === "string") return { text: p.trim(), attachments: {} }
+  if (!p || typeof p !== "object") return { text: "", attachments: {} }
+  const d = p as Record<string, unknown>
+  const inner = d.prompt && typeof d.prompt === "object" ? (d.prompt as Record<string, unknown>) : d
+  const text = typeof inner.text === "string" ? inner.text.trim() : typeof d.prompt === "string" ? d.prompt.trim() : ""
+  const attachments: Record<string, unknown> = {}
+  for (const k of ["files", "agents", "skills"]) {
+    const v = inner[k]
+    if (Array.isArray(v) && v.length) attachments[k] = v
+  }
+  return { text, attachments }
+}
+
 const configDir = () => join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode")
 
 function summarise(rec: Record<string, any> | { live: true; progress: any[]; logs: string[] }) {
@@ -146,8 +162,8 @@ export default {
         description: "Switch this session to the ultra lead agent (multi-agent workflows on) and send the task",
         async execute(input: any) {
           await ctx.session.switchAgent({ sessionID: input.sessionID, agent: "ultra" })
-          const text = (input.prompt ?? "").trim()
-          if (text) await ctx.session.prompt({ sessionID: input.sessionID, text, delivery: input.delivery })
+          const { text, attachments } = commandPrompt(input.prompt)
+          if (text) await ctx.session.prompt({ sessionID: input.sessionID, text, ...attachments, delivery: input.delivery })
         },
       })
       editor.add({

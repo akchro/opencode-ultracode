@@ -120,6 +120,37 @@ describe("plugin", () => {
     expect(commands.map((c) => c.name).sort()).toEqual(["ultracode", "ultracode-off"])
     for (const t of tools) expect(t.input.type).toBe("object")
   })
+
+  test("/ultracode switches the agent and forwards the task, whatever shape the prompt comes in", async () => {
+    const commands: any[] = []
+    const calls: any[] = []
+    await plugin.setup({
+      options: { home: mkdtempSync(join(tmpdir(), "ucp-")) },
+      location: { directory: tmpdir() },
+      model: { default: async () => ({ providerID: "p", id: "m" }) },
+      tool: { transform: () => {} },
+      command: { transform: (fn: any) => fn({ add: (c: any) => commands.push(c) }) },
+      session: {
+        switchAgent: async (x: any) => { calls.push(["switch", x]) },
+        prompt: async (x: any) => { calls.push(["prompt", x]) },
+      },
+    })
+    const ultracode = commands.find((c) => c.name === "ultracode")
+    const files = [{ type: "file", path: "a.ts" }]
+    // OpenCode 2.0.32: a draft object (this shape threw "(input.prompt ?? "").trim is not a function" before the fix)
+    await ultracode.execute({ sessionID: "s1", prompt: { text: "  review my diff  ", files, agents: [], skills: [] }, delivery: "queue" })
+    await ultracode.execute({ sessionID: "s2", prompt: { prompt: { text: "nested draft" } } })
+    await ultracode.execute({ sessionID: "s3", prompt: "plain string" })
+    await ultracode.execute({ sessionID: "s4", prompt: { text: "   " } })
+    expect(calls.filter((c) => c[0] === "switch").map((c) => c[1])).toEqual(
+      ["s1", "s2", "s3", "s4"].map((sessionID) => ({ sessionID, agent: "ultra" })))
+    const prompts = calls.filter((c) => c[0] === "prompt").map((c) => c[1])
+    expect(prompts).toEqual([
+      { sessionID: "s1", text: "review my diff", files, delivery: "queue" },
+      { sessionID: "s2", text: "nested draft", delivery: undefined },
+      { sessionID: "s3", text: "plain string", delivery: undefined },
+    ])
+  })
 })
 
 describe("saved harnesses", () => {
