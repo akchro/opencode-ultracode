@@ -77,7 +77,12 @@ export function load(source: string): Program {
   if (CONTROL.test(source))
     throw new LaunchRejected("script contains control characters (a CR from CRLF line endings counts): save it with LF only")
   const { literal } = extractMeta(source)
-  if (/`|\$\{|\.\.\.|[A-Za-z_$][\w$]*\s*\(/.test(literal.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')))
+  // Blank out strings, then comments (a comment may mention `phase()`), then look for code that is not a literal.
+  const bare = literal
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/[^\n]*/g, " ")
+  if (/`|\$\{|\.\.\.|[A-Za-z_$][\w$]*\s*\(/.test(bare))
     throw new LaunchRejected("meta must be a pure literal: no variables, calls, spreads or template interpolation")
   let meta: Meta
   try {

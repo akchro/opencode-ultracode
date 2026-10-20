@@ -24,6 +24,7 @@ and a run can be resumed.
 
 ```powershell
 .\install.ps1                 # Windows; add -DefaultAgent to make ultra the default agent everywhere
+powershell -ExecutionPolicy Bypass -File .\install.ps1   # if running local scripts is disabled
 ```
 
 ```sh
@@ -42,9 +43,12 @@ Then restart the OpenCode background service so it loads the plugin: `opencode s
   state and edge cases, tests and integration; pass `auditors: [{ key, prompt }]` to choose your own, `light: true`
   for a UI- or doc-only change.
 
-The lead decides on its own when to fan out (`agents/ultra.md`, "When to fan out, when not"): reviews, research with
-many questions, builds that split by file, item-scale production and open design choices get workflows;
-corrections, small fixes, questions and live-tool loops stay solo.
+The lead decides on its own when to fan out, per phase of a task (`agents/ultra.md`, "When to fan out, when not"):
+reading a lot first (a large or unfamiliar codebase, decompiled or reference source: roughly over 10 files or 3,000
+lines) gets a research workflow even when the work after it is a live-tool loop; reviews, research with many
+questions, builds that split by file, item-scale production and open design choices get workflows; small corrections
+to code it already understands, questions and the live-tool tuning loop itself stay solo. Research notes go to
+`.ultracode/notes/` in the project.
 
 ### Script API (what the lead writes)
 

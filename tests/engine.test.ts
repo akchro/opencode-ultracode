@@ -179,6 +179,8 @@ return await parallel([1, 2, 3].map((i) => () => agent('t' + i, { label: 'a' + i
     ]
     for (const script of bad) expect(() => e.launch({ script })).toThrow(LaunchRejected)
     expect(() => e.launch({ name: "nope" })).toThrow(/not found/)
+    // comments inside meta are fine, even ones that mention calls
+    expect(() => e.launch({ script: `export const meta = { // a literal; see phase() below\n  name: 'c', /* not a call() */ description: 'd' }\nreturn 1` })).not.toThrow()
   })
 
   test("a nested workflow shares the key chain and gets its own group", async () => {

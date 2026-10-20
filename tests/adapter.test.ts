@@ -191,6 +191,27 @@ describe("saved harnesses", () => {
     expect(rec.result.unverified.length).toBe(1)
   })
 
+  test("the example scripts in agents/ultra.md load and run", async () => {
+    const md = await Bun.file(join(import.meta.dir, "..", "agents", "ultra.md")).text()
+    const blocks = [...md.matchAll(/```js\n([\s\S]*?)```/g)].map((m) => m[1])
+    expect(blocks.length).toBe(2)
+    const { run, seen } = fakeAgents((label) => {
+      if (label.startsWith("audit:")) return { findings: [{ file: "a.ts", severity: "high", claim: "c", scenario: "s" }] }
+      if (label.startsWith("verify:") && label.includes(".ts")) return { real: true, evidence: "e" }
+      if (label.startsWith("trace:")) return { rules: [{ rule: "r", where: "x.cs:1" }] }
+      if (label.startsWith("verify:")) return { wrong: [], corrected: [] }
+      return "no gaps"
+    })
+    const review = await launch(run, { script: blocks[0] })
+    expect(review.status).toBe("completed")
+    expect(review.result.confirmed.length).toBe(2)
+    const research = await launch(run, { script: blocks[1] })
+    expect(research.status).toBe("completed")
+    expect(research.result.topics.map((t: any) => t.key)).toEqual(["connections", "placement"])
+    expect(research.result.gaps).toBe("no gaps")
+    expect(seen.filter((s) => s.label.startsWith("trace:")).every((s) => s.agentType === undefined)).toBe(true)
+  })
+
   test("design-panel loads, and refuses a missing brief inside the run", async () => {
     const { run } = fakeAgents(() => null)
     const rec = await launch(run, { name: "design-panel", args: {} })
