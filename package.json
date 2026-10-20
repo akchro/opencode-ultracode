@@ -1,0 +1,10 @@
+{
+  "name": "opencode-ultracode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Code-driven multi-agent workflows for OpenCode 2.x, modelled on Claude Code's ultracode / Workflow tool",
+  "scripts": {
+    "test": "bun test"
+  }
+}

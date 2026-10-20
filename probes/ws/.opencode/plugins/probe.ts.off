@@ -1,0 +1,189 @@
+// Probes P2-P8 for the OpenCode 2.x workflow engine. Run only when OC_PROBE is set, from `opencode serve` in this
+// folder: the plugin drives every step itself (no model orchestrating) and writes each result to probes/out/.
+//   P2 child session with parentID + agent, prompt, wait, read the reply
+//   P3 a submit tool that validates against a schema and rejects bad input (does the model retry?)
+//   P4 a long tool call (how long can execute() run?)
+//   P5 a synthetic message into an idle "lead" session: does it start a turn?
+//   P6 per-session permissions: edits inside an owned folder allowed, outside denied
+//   P7 several child sessions at once: do they run concurrently?
+//   P8 what the parent sees (session.get / list) and which model ran
+const OUT = "C:/dev/opencode-ultracode/probes/out"
+const WS = "C:/dev/opencode-ultracode/probes/ws"
+const t0 = Date.now()
+const log: any[] = []
+
+async function save(name: string, data: unknown) {
+  await Bun.write(`${OUT}/${name}.json`, JSON.stringify(data, null, 1))
+}
+function note(step: string, data: unknown) {
+  log.push({ t: (Date.now() - t0) / 1000, step, data })
+  return save("p2-log", log)
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+function shape(v: any, depth = 0): any {
+  if (v === null || v === undefined) return v
+  if (Array.isArray(v)) return depth > 3 ? `array(${v.length})` : v.slice(0, 6).map((x) => shape(x, depth + 1))
+  if (typeof v === "object") {
+    if (depth > 4) return "object"
+    const o: any = {}
+    for (const k of Object.keys(v)) o[k] = shape(v[k], depth + 1)
+    return o
+  }
+  if (typeof v === "string") return v.length > 400 ? v.slice(0, 400) + `…[+${v.length - 400}]` : v
+  return v
+}
+
+// The structured-result channel: the engine expects one schema per child session.
+const expected = new Map<string, { required: string[]; got?: any; rejects: number }>()
+
+function replyText(messages: any): string {
+  // Unknown message shape on 2.x: collect every string under a "text" key of assistant-ish entries.
+  const out: string[] = []
+  const walk = (v: any, inAssistant: boolean) => {
+    if (!v || typeof v !== "object") return
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, inAssistant))
+    const role = v.role ?? v.type
+    const asst = inAssistant || role === "assistant" || role === "assistant-message"
+    if (asst && typeof v.text === "string") out.push(v.text)
+    for (const k of Object.keys(v)) if (typeof v[k] === "object") walk(v[k], asst)
+  }
+  walk(messages, false)
+  return out.join("\n")
+}
+
+async function child(ctx: any, title: string, text: string, extra: any = {}) {
+  const s = await ctx.session.create({ title, parentID: extra.parentID, agent: "wf-probe", permissions: extra.permissions })
+  const sid = s?.id ?? s?.sessionID ?? s?.data?.id
+  const started = Date.now()
+  await ctx.session.prompt({ sessionID: sid, text })
+  await ctx.session.wait({ sessionID: sid })
+  const msgs = await ctx.session.context({ sessionID: sid })
+  return { sid, session: s, ms: Date.now() - started, msgs, reply: replyText(msgs) }
+}
+
+async function run(ctx: any) {
+  await note("start", { version: ctx.app?.version, defaultModel: await ctx.model.default?.().catch((e: any) => String(e)) })
+
+  // A lead session to hang children on.
+  const lead = await ctx.session.create({ title: "probe lead" })
+  const leadID = lead?.id ?? lead?.sessionID
+  await note("lead.create", shape(lead))
+
+  // P2
+  try {
+    const r = await child(ctx, "p2 child", "Reply with exactly the word PONG and nothing else.", { parentID: leadID })
+    const info = await ctx.session.get({ sessionID: r.sid })
+    await save("p2-child", { ms: r.ms, reply: r.reply, session: shape(r.session), get: shape(info), messages: shape(r.msgs) })
+    await note("P2", { ok: /PONG/.test(r.reply), ms: r.ms, parentID: info?.parentID ?? info?.parent?.id })
+  } catch (e: any) { await note("P2 error", String(e?.stack ?? e)) }
+
+  // P3: the model is told to submit a wrong value first; the tool rejects it with the reason.
+  try {
+    const s = await ctx.session.create({ title: "p3 child", parentID: leadID, agent: "wf-probe" })
+    const sid = s?.id ?? s?.sessionID
+    expected.set(sid, { required: ["answer"], rejects: 0 })
+    await ctx.session.prompt({
+      sessionID: sid,
+      text: "Call the tool wf_submit with input {\"result\": {\"answer\": \"forty-two\"}}. It will be rejected. Read the error, fix the value so it matches what the error asks for, and call wf_submit again. Then reply DONE.",
+    })
+    await ctx.session.wait({ sessionID: sid })
+    const msgs = await ctx.session.context({ sessionID: sid })
+    const e = expected.get(sid)
+    await save("p3-child", { expected: e, reply: replyText(msgs), messages: shape(msgs) })
+    await note("P3", { got: e?.got, rejects: e?.rejects })
+  } catch (e: any) { await note("P3 error", String(e?.stack ?? e)) }
+
+  // P5: synthetic message into an idle lead: does it start a model turn?
+  try {
+    await ctx.session.prompt({ sessionID: leadID, text: "Reply with the word READY and nothing else." })
+    await ctx.session.wait({ sessionID: leadID })
+    const before = replyText(await ctx.session.context({ sessionID: leadID }))
+    const syn = await ctx.session.synthetic({
+      sessionID: leadID,
+      text: "<workflow-notification run=\"probe\">The workflow finished. Reply with the word BANANA and nothing else.</workflow-notification>",
+      resume: true,
+    })
+    await sleep(1500)
+    await ctx.session.wait({ sessionID: leadID })
+    const after = replyText(await ctx.session.context({ sessionID: leadID }))
+    await note("P5", { before: before.slice(-200), after: after.slice(-200), bananaTurn: /BANANA/.test(after.replace(/Reply with the word BANANA/, "")), synthetic: shape(syn) })
+  } catch (e: any) { await note("P5 error", String(e?.stack ?? e)) }
+
+  // P6: per-session permissions, appended after the agent's (last match wins).
+  try {
+    const r = await child(ctx, "p6 child",
+      `Use your file edit or write tool to create the file ${WS}/owned/a.txt containing "a", then try to create ${WS}/other/b.txt containing "b". Report which one succeeded.`,
+      { parentID: leadID, permissions: [
+        { action: "edit", resource: "*", effect: "deny" },
+        { action: "edit", resource: `${WS}/owned/*`, effect: "allow" },
+      ] })
+    const fs = await import("node:fs")
+    await note("P6", { owned: fs.existsSync(`${WS}/owned/a.txt`), other: fs.existsSync(`${WS}/other/b.txt`), reply: r.reply.slice(0, 600) })
+  } catch (e: any) { await note("P6 error", String(e?.stack ?? e)) }
+
+  // P7: four children at once.
+  try {
+    const t = Date.now()
+    const rs = await Promise.all([1, 2, 3, 4].map((i) =>
+      child(ctx, `p7 child ${i}`, `Reply with exactly the word NUMBER${i} and nothing else.`, { parentID: leadID })
+        .then((r) => ({ i, ms: r.ms, ok: r.reply.includes(`NUMBER${i}`), start: 0 }))))
+    await note("P7", { wall: Date.now() - t, each: rs })
+  } catch (e: any) { await note("P7 error", String(e?.stack ?? e)) }
+
+  // P4 last: a long tool call (240 s).
+  try {
+    const r = await child(ctx, "p4 child", "Call the tool probe_sleep with {\"seconds\": 240}. When it returns, reply with exactly what it returned.", { parentID: leadID })
+    await note("P4", { ms: r.ms, reply: r.reply.slice(0, 400) })
+  } catch (e: any) { await note("P4 error", String(e?.stack ?? e)) }
+
+  // P8
+  try {
+    const list = await ctx.session.list({ directory: ctx.location.directory, limit: 30 })
+    await note("P8", { list: shape(list) })
+  } catch (e: any) { await note("P8 error", String(e?.stack ?? e)) }
+  await note("done", {})
+}
+
+export default {
+  id: "probe",
+  async setup(ctx: any) {
+    ctx.tool.transform((editor: any) => {
+      editor.add({
+        name: "wf_submit",
+        description: "Submit your final structured result. Input: {\"result\": <object>}. Rejected inputs come back with the reason; fix and call again.",
+        input: { type: "object", properties: { result: { type: "object" } }, required: ["result"], additionalProperties: false },
+        async execute(input: any, context: any) {
+          const e = expected.get(context.sessionID)
+          if (!e) return { content: "No result is expected from this session." }
+          const r = input?.result ?? {}
+          const bad = e.required.filter((k) => !(k in r))
+          if (!bad.length && typeof r.answer !== "number") bad.push("answer must be a number, not " + typeof r.answer)
+          if (bad.length) {
+            e.rejects++
+            throw new Error("Result rejected: " + bad.join("; "))
+          }
+          e.got = r
+          return { content: "Result accepted." }
+        },
+      })
+      editor.add({
+        name: "probe_sleep",
+        description: "Waits the given number of seconds, then returns.",
+        input: { type: "object", properties: { seconds: { type: "number" } }, required: ["seconds"], additionalProperties: false },
+        async execute(input: any, context: any) {
+          const ms = Math.min(600, Number(input?.seconds) || 1) * 1000
+          const start = Date.now()
+          while (Date.now() - start < ms) {
+            if (context?.signal?.aborted) return { content: `aborted after ${(Date.now() - start) / 1000}s` }
+            context?.progress?.({ status: `${Math.round((Date.now() - start) / 1000)} s` })
+            await sleep(5000)
+          }
+          return { content: `slept ${(Date.now() - start) / 1000}s` }
+        },
+      })
+    })
+    if (process.env.OC_PROBE !== "1") return
+    run(ctx).catch((e) => note("fatal", String(e?.stack ?? e)))
+  },
+}
