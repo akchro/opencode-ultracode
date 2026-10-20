@@ -113,13 +113,27 @@ Builds and fixes that change what the running game or app does end with a live c
 ```js
 workflow({ name: 'live-verify', args: {
   context: 'What changed; the Studio place (name or placeId); the Rojo-synced files',
-  checks: [{ key: 'spawn', how: 'Start Play, read the character position', expect: 'within 5 studs of SpawnPad' }],
+  harness: 'AcHeadless (Edit, before Play); AcVirtualKeys = held actions; state in Player attributes',
+  checks: [{
+    key: 'boost',
+    setup: ['AcHeadless = true in Edit, then Play', 'wait for the mech in the world'],
+    steps: ["AcVirtualKeys = 'Boost,Forward' for 2.5 s", 'clear AcVirtualKeys'],
+    observe: 'a Client Heartbeat recorder of AcSpeedKmh and AcEN',
+    expect: 'peak AcSpeedKmh within 2 % of the class boost speed; AcEN falls',
+  }],
+  bringToFront: false,   // true lets the operator raise Studio's window for real input / screenshots
 } })
 ```
 
-The operator checks Studio's state first and reports `blocked` instead of stopping a playtest you are in; it
-restores what it changed and reports measured values with evidence; the judge turns a pass with no evidence into
-a failure. Workers and reviewers cannot see the Studio tools (`roblox-studio_*` is denied in their agent files: add a
+The operator PLAYS each check the way Claude Code did in these projects: it learns the game's test harness from
+AGENTS.md / CLAUDE.md and the user's Claude Code notes for the project, puts the game in the state the check needs
+through the game's own hooks (headless switches set in Edit before Play, debug attributes such as `BH_DebugZone`,
+debug calls such as `AcDebug:Invoke`), drives it with the game's virtual input (`AcVirtualKeys`) or real input
+(`user_keyboard_input`, `user_mouse_input` on GUI paths or world points), records state over time with a client
+Heartbeat recorder, and compares numbers. It checks Studio's state first and reports `blocked` instead of stopping a
+playtest you are in; it releases every input, clears what it set and stops its playtest; the judge turns a pass with
+no evidence, or a static read where the check needed input, into a failure. Real input and screenshots need Studio's
+viewport rendering: with `bringToFront: true` the operator runs `tools/studio-front.ps1` to raise the window. Workers and reviewers cannot see the Studio tools (`roblox-studio_*` is denied in their agent files: add a
 line per other live-system MCP server you use). While an operator holds the lock, `workflow_status` shows it under
 `locks`.
 

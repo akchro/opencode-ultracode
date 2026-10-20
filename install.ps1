@@ -47,6 +47,8 @@ $dest = Join-Path $cfg "ultracode"
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $dest "src")
 New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item -Recurse (Join-Path $repo "src") $dest
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $dest "tools")
+Copy-Item -Recurse (Join-Path $repo "tools") $dest
 Write-Lf (Join-Path $cfg "plugins\ultracode.ts") "// opencode-ultracode: the workflow engine plugin ($repo)`nexport { default } from `"../ultracode/src/plugin.ts`"`n"
 foreach ($a in $agents) { Write-Lf (Join-Path $cfg "agents\$a") ([System.IO.File]::ReadAllText((Join-Path $repo "agents\$a"))) }
 foreach ($w in $workflows) { Write-Lf (Join-Path $cfg "workflows\$w") ([System.IO.File]::ReadAllText((Join-Path $repo "workflows\$w"))) }

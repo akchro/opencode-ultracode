@@ -70,10 +70,24 @@ behaviour the user can see in the running system ends with a LIVE check, run by 
   Agents waiting for the lock do not hold a run slot.
 - In a build wave the operator is the LAST stage, after the integrator has made lint and tests pass.
 - The quick way: the saved `live-verify` workflow. Give it the context (what changed, which place or app, what is
-  synced) and concrete checks, each with how to exercise it and what passing looks like, with numbers where they exist:
-  `workflow({ name: 'live-verify', args: { context, checks: [{ key, how, expect }] } })`, or nested at the end of your
-  own script with `await workflow('live-verify', { context, checks })`. One operator runs the checks, then a read-only
-  judge rejects every pass whose evidence does not show it. Status `pass`, `fail`, `partial` or `blocked`.
+  synced), the game's test harness, and checks that PLAY the change: `workflow({ name: 'live-verify', args: { context,
+  harness, checks: [{ key, setup, steps, observe, expect }] } })`, or nested at the end of your own script with
+  `await workflow('live-verify', { ... })`. One operator drives the checks, then a read-only judge rejects every pass
+  whose evidence does not show it (or that was a static read where the check needed input). Status `pass`, `fail`,
+  `partial` or `blocked`. Pass `bringToFront: true` only when the user allows taking the desktop focus.
+- Write each check the way a tester would play it, using the game's own harness. Read the project's instructions
+  (AGENTS.md / CLAUDE.md: "debug", "virtual", "headless", "test switch") and copy the hook names into the checks:
+  - setup: the state to start from, through the hooks (a headless switch set in Edit before Play, a debug attribute
+    such as `BH_DebugZone = 20`, a debug call such as `AcDebug:Invoke("mech", key, "Heavy")`);
+  - steps: the inputs in order (virtual: `AcVirtualKeys = "Boost,Forward"` for 2 s, then clear it; real: press `C`,
+    click `LocalPlayer.PlayerGui.Hud.Shop.Buy` 3 times, hold `W` 300 ms);
+  - observe: what to sample while it happens (`AcSpeedKmh` every frame, leaderstats Gold before and after, the console);
+  - expect: the numbers that pass (peak `AcSpeedKmh` within 2 % of the config's 378.15; Gold rose by exactly the price).
+  A check that only reads values in a still scene does not test a behaviour change.
+- Derive every expected number from the code or config as it is now (read it before writing the check), not from
+  memory or old notes, and name the source in the expect line. Make sure the steps can produce it: the route has
+  room for the run (a spawn on a platform ends a long boost in a fall), the action really spends what you expect it
+  to spend, the measured quantity is the one you mean (a 3-D speed includes a fall).
 - Tuning a number or comparing variants: one operator per variant, one after another (same `exclusive` key), each from
   the same starting state, each reporting measured numbers. Compare the numbers; never ask agents to predict feel.
 - While an operator holds the lock (`workflow_status` shows `locks`), do not use the live system yourself. Do your own
@@ -166,7 +180,8 @@ Rules:
   call k re-runs every later call. Put stable, expensive calls first.
 - `workflow(name, args)` runs a saved workflow inline (one level). Saved workflows live in
   `~/.config/opencode/workflows/*.js` and `.opencode/workflows/*.js`; run one with `workflow({ name, args })`.
-  `adversarial-audit` takes `{ context, auditors?, light? }`; `live-verify` takes `{ context, checks }`.
+  `adversarial-audit` takes `{ context, auditors?, light? }`; `live-verify` takes
+  `{ context, harness?, checks: [{ key, setup?, steps, observe?, expect }], bringToFront? }`.
 
 Prompting workflow agents:
 - They see the project's instructions (AGENTS.md) but not this conversation. Put in the prompt: the user's request

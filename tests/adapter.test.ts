@@ -210,9 +210,9 @@ describe("CLAUDE.md compatibility", () => {
 
 describe("saved harnesses", () => {
   function fakeAgents(byLabel: (label: string, agentType?: string) => unknown) {
-    const seen: Array<{ label: string; agentType?: string }> = []
+    const seen: Array<{ label: string; agentType?: string; prompt: string }> = []
     const run: RunAgent = async (r) => {
-      seen.push({ label: r.label, agentType: r.agentType })
+      seen.push({ label: r.label, agentType: r.agentType, prompt: r.prompt })
       return { value: byLabel(r.label, r.agentType) }
     }
     return { run, seen }
@@ -298,6 +298,34 @@ describe("saved harnesses", () => {
     a = fakeAgents((label) => label === "operate" ? report({ checks: [{ key: "spawn", pass: true, measured: "1", evidence: "e" }] }) : { verdicts: [{ key: "spawn", agree: true, reason: "ok" }] })
     rec = await launch(a.run, { name: "live-verify", args: { context: "c", checks, judge: true } })
     expect(rec.result.status).toBe("partial")
+  })
+
+  test("live-verify: driven checks reach the operator and the judge; a check with no steps is refused", async () => {
+    const check = {
+      key: "boost", setup: ["AcHeadless = true in Edit before Play", "AcDebug mech Light"],
+      steps: ["AcVirtualKeys = 'Boost,Forward' for 2 s", "clear AcVirtualKeys"],
+      observe: "AcSpeedKmh every frame", expect: "peak AcSpeedKmh 370-386",
+    }
+    const a = fakeAgents((label) => label === "operate"
+      ? { blocked: "", consoleErrors: [], restored: true, notes: "", checks: [{ key: "boost", pass: true, measured: "peak 377.9", evidence: "recorder", driven: "AcVirtualKeys Boost,Forward 2.0 s", timeline: "0.5: 210, 1.0: 377.9" }] }
+      : { verdicts: [{ key: "boost", agree: true, reason: "timeline shows it" }] })
+    const rec = await launch(a.run, { name: "live-verify", args: { context: "ac-combat boost change", harness: "AcHeadless, AcVirtualKeys, AcDebug", bringToFront: true, checks: [check] } })
+    expect(rec.result.status).toBe("pass")
+    expect(rec.result.checks[0].driven).toContain("AcVirtualKeys")
+    const op = a.seen.find((s) => s.label === "operate")!.prompt
+    expect(op).toContain("SETUP: 1) AcHeadless = true in Edit before Play  2) AcDebug mech Light")
+    expect(op).toContain("STEPS: 1) AcVirtualKeys = 'Boost,Forward' for 2 s")
+    expect(op).toContain("OBSERVE: AcSpeedKmh every frame")
+    expect(op).toContain("Test harness (from the lead): AcHeadless, AcVirtualKeys, AcDebug")
+    expect(op).toContain("front: allowed")
+    const jp = a.seen.find((s) => s.label === "judge")!.prompt
+    expect(jp).toContain("DROVE: AcVirtualKeys Boost,Forward 2.0 s")
+    expect(jp).toContain("TIMELINE: 0.5: 210")
+
+    const b = fakeAgents(() => null)
+    const bad = await launch(b.run, { name: "live-verify", args: { context: "c", checks: [{ key: "x", expect: "y" }] } })
+    expect(bad.status).toBe("failed")
+    expect(bad.error).toContain("needs steps")
   })
 
   test("design-panel loads, and refuses a missing brief inside the run", async () => {

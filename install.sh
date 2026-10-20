@@ -19,6 +19,7 @@ fi
 
 mkdir -p "$cfg/ultracode" "$cfg/plugins" "$cfg/agents" "$cfg/workflows"
 rm -rf "$cfg/ultracode/src" && cp -R "$repo/src" "$cfg/ultracode/src"
+rm -rf "$cfg/ultracode/tools" && cp -R "$repo/tools" "$cfg/ultracode/tools"
 printf '// opencode-ultracode: the workflow engine plugin (%s)\nexport { default } from "../ultracode/src/plugin.ts"\n' "$repo" > "$cfg/plugins/ultracode.ts"
 for a in $agents; do cp "$repo/agents/$a" "$cfg/agents/$a"; done
 cp "$repo"/workflows/*.js "$cfg/workflows/"
