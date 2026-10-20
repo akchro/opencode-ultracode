@@ -17,8 +17,10 @@ and a run can be resumed.
 | engine | `src/engine.ts`, `src/core.ts`, `src/sandbox.ts` | `agent` / `parallel` / `pipeline` / `phase` / `log` / `workflow` / `args` / `budget`, FIFO limiter, chained cache keys, journal, run record, notification |
 | OpenCode adapter | `src/opencode.ts` | one child session per `agent()` call, results through `wf_submit`, ownership as session permissions |
 | lead agent | `agents/ultra.md` | the authoring reference, when to fan out, the loop around a workflow |
-| workflow agents | `agents/wf-worker.md`, `agents/wf-reviewer.md` | hidden subagents; no sub-subagents, no questions, no git state changes; the reviewer cannot edit |
-| saved workflows | `workflows/adversarial-audit.js`, `workflows/design-panel.js` | the two harnesses used most in the Claude Code history this is based on |
+| workflow agents | `agents/wf-worker.md`, `agents/wf-reviewer.md` | hidden subagents; no sub-subagents, no questions, no git state changes, no live-system tools; the reviewer cannot edit |
+| live operator | `agents/wf-operator.md` | the only agent type allowed live-system tools (Roblox Studio's MCP): preflight, run the checks, restore, report measured values |
+| saved workflows | `workflows/adversarial-audit.js`, `workflows/design-panel.js`, `workflows/live-verify.js` | the two harnesses used most in the Claude Code history this is based on, and a live check: one operator runs your checks, a read-only judge rejects passes without evidence |
+| CLAUDE.md support | `src/plugin.ts` | a project with a CLAUDE.md and no AGENTS.md gets its CLAUDE.md added to every model request (OpenCode 2 reads AGENTS.md only); plugin option `claudeMd: false` turns it off |
 
 ## Install
 
@@ -64,7 +66,8 @@ return { results }
 
 `agent()` options: `label`, `phase`, `schema`, `agentType` (any subagent; default `wf-worker`), `model`
 (`provider/model#variant`), `effort` (a model variant name), `owns` (project-relative paths or globs: every other edit
-is denied by permission), `readOnly`, `permissions` (raw rules). `Date.now()` and `Math.random()` throw (resume).
+is denied by permission), `readOnly`, `permissions` (raw rules), `exclusive` (a lock name: agents with the same name run
+one at a time across all runs; give it to every agent that drives a live system). `Date.now()` and `Math.random()` throw (resume).
 
 ### How it maps onto Claude Code
 
@@ -76,6 +79,7 @@ is denied by permission), `readOnly`, `permissions` (raw rules). `Date.now()` an
 | `min(16, CPUs - 2)` concurrent agents per run | 6 per run by default (plugin option `slots`) |
 | journal + chained cache keys + `resumeFromRunId` | the same formula and semantics: only the unchanged prefix of calls replays |
 | ownership written into prompts | `owns` / `readOnly` enforced as session permission rules |
+| one Studio operator, a hand-written promise-chain mutex | `agentType: 'wf-operator'` with `exclusive: 'studio'`: a built-in lock shared by every run, so one agent drives the live system at a time |
 | saved workflows in `.claude/workflows/` | `~/.config/opencode/workflows/` and `<project>/.opencode/workflows/`, re-read at every launch |
 
 Run records, journals and outputs are kept under `~/.local/share/opencode/ultracode/sessions/<sessionID>/`.
@@ -100,6 +104,24 @@ Probes (`probes/`), each a real run with the default model:
 Tests: `bun test` (the CLI's embedded Bun works: `BUN_BE_BUN=1 opencode-cli test`): the engine's conformance suite
 (resume prefix, null semantics, FIFO, kills, refusals, nesting, budget, neutralisation, the 8,000-character cut,
 string args), the adapter against a fake `ctx`, plugin registration and both harnesses.
+
+## Live testing
+
+Builds and fixes that change what the running game or app does end with a live check by ONE operator agent
+(`agentType: 'wf-operator'`, `exclusive: 'studio'`), usually through the saved workflow:
+
+```js
+workflow({ name: 'live-verify', args: {
+  context: 'What changed; the Studio place (name or placeId); the Rojo-synced files',
+  checks: [{ key: 'spawn', how: 'Start Play, read the character position', expect: 'within 5 studs of SpawnPad' }],
+} })
+```
+
+The operator checks Studio's state first and reports `blocked` instead of stopping a playtest you are in; it
+restores what it changed and reports measured values with evidence; the judge turns a pass with no evidence into
+a failure. Workers and reviewers cannot see the Studio tools (`roblox-studio_*` is denied in their agent files: add a
+line per other live-system MCP server you use). While an operator holds the lock, `workflow_status` shows it under
+`locks`.
 
 ## Limits
 

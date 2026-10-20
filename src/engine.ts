@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { basename, dirname, extname, join, resolve } from "node:path"
 import {
-  AbortError, Budget, BudgetExhausted, chainKey, checkSchemaRoot, FifoLimiter, frameTask, isEmpty, Journal,
+  AbortError, Budget, BudgetExhausted, chainKey, checkSchemaRoot, exclusiveLocks, FifoLimiter, frameTask, isEmpty, Journal,
   LaunchRejected, MAX_AGENTS, MAX_ITEMS, neutralise, newAgentId, newRunId, newTaskId, nowMs, preview, RESULT_CUT,
 } from "./core.ts"
 import { load, run, type Meta, type Program } from "./sandbox.ts"
@@ -114,6 +114,21 @@ export class Scope {
       return hit.value
     }
     entry.queuedAt = nowMs()
+    const exclusive = typeof opts.exclusive === "string" && opts.exclusive ? opts.exclusive : undefined
+    if (exclusive) {
+      entry.exclusive = exclusive
+      entry.state = "waiting"
+      await exclusiveLocks.acquire(exclusive, s.abort.signal, { runId: s.runId, label: entry.label })
+    }
+    try {
+      return await this.runInSlot(key, prompt, opts, entry)
+    } finally {
+      if (exclusive) exclusiveLocks.release(exclusive)
+    }
+  }
+
+  private async runInSlot(key: string, prompt: string, opts: Record<string, unknown>, entry: Progress): Promise<unknown> {
+    const s = this.s
     await s.limiter.acquire(s.abort.signal)
     try {
       const agentId = newAgentId()

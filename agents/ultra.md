@@ -60,6 +60,28 @@ verified, and what is left open.
 Chain one workflow per phase (understand -> design -> build -> audit -> fix -> re-audit at a smaller scale), and write
 each next script after reading the last result.
 
+# Live testing
+
+Tests and audits read code; they do not show that the running app or game behaves. Every build or fix that changes
+behaviour the user can see in the running system ends with a LIVE check, run by one operator agent.
+- The operator is `agentType: 'wf-operator'` with `exclusive: 'studio'` (or the name of the live system). It is the
+  only agent type allowed the live-system tools (workers and reviewers are denied them), and the engine runs agents
+  with the same `exclusive` key one at a time, across every run, so two operators never drive one system at once.
+  Agents waiting for the lock do not hold a run slot.
+- In a build wave the operator is the LAST stage, after the integrator has made lint and tests pass.
+- The quick way: the saved `live-verify` workflow. Give it the context (what changed, which place or app, what is
+  synced) and concrete checks, each with how to exercise it and what passing looks like, with numbers where they exist:
+  `workflow({ name: 'live-verify', args: { context, checks: [{ key, how, expect }] } })`, or nested at the end of your
+  own script with `await workflow('live-verify', { context, checks })`. One operator runs the checks, then a read-only
+  judge rejects every pass whose evidence does not show it. Status `pass`, `fail`, `partial` or `blocked`.
+- Tuning a number or comparing variants: one operator per variant, one after another (same `exclusive` key), each from
+  the same starting state, each reporting measured numbers. Compare the numbers; never ask agents to predict feel.
+- While an operator holds the lock (`workflow_status` shows `locks`), do not use the live system yourself. Do your own
+  live testing before the workflow's operator stage or after it.
+- If the operator reports `blocked` (the user is playing, the sync is off, the wrong place is open), tell the user in
+  one line what is needed. Do not retry in a loop.
+- In your report, say what was verified live and what was not.
+
 # Writing a script
 
 ```js
@@ -127,7 +149,8 @@ Rules:
   died (usage limit, provider error). Opts: `label`, `phase`, `schema` (root `{type:'object', properties}`),
   `agentType` (`wf-worker` default, `wf-reviewer` read-only, or any subagent), `model` ("provider/model#variant"),
   `effort` (a model variant such as "high"), `owns` (project-relative paths or globs this agent may edit; every
-  other edit is denied by permission), `readOnly` (no edits at all).
+  other edit is denied by permission), `readOnly` (no edits at all), `exclusive` (a lock name such as 'studio': agents
+  with the same name run one at a time, across all runs; give it to every agent that drives a live system).
 - `pipeline(items, stage1, stage2, ...)` is the default for multi-stage work: no barrier, each item moves on as soon
   as its stage finishes. A stage that throws or returns null ends that item. `parallel(thunks)` is a barrier; use it
   only when a stage needs all prior results together (dedup across all findings, early exit on zero, comparing
@@ -143,7 +166,7 @@ Rules:
   call k re-runs every later call. Put stable, expensive calls first.
 - `workflow(name, args)` runs a saved workflow inline (one level). Saved workflows live in
   `~/.config/opencode/workflows/*.js` and `.opencode/workflows/*.js`; run one with `workflow({ name, args })`.
-  `adversarial-audit` takes `{ context, auditors?, light? }`.
+  `adversarial-audit` takes `{ context, auditors?, light? }`; `live-verify` takes `{ context, checks }`.
 
 Prompting workflow agents:
 - They see the project's instructions (AGENTS.md) but not this conversation. Put in the prompt: the user's request
@@ -153,8 +176,8 @@ Prompting workflow agents:
   verify high and medium, return low as unverified. One skeptic per finding is enough; spend agents on more lenses.
 - Parallel writers share one checkout: give each an `owns` list, list the frozen shared files and their agreed
   interfaces, and add one integrator stage at the end that owns everything and runs the full test suite and lint.
-- Exactly one agent may drive a live system (a dev server, a device, a browser session); every other agent is told
-  "files only".
+- Only `wf-operator` agents with an `exclusive` key drive a live system (Roblox Studio, a dev server, a device, a
+  browser session); every other agent is told "files only" (see Live testing).
 - Never ask agents to commit, push, stash, reset or switch branches (their permissions deny it anyway).
 
 Quality patterns to pick from: adversarial verify (skeptics per finding); perspective-diverse verify (distinct lenses);

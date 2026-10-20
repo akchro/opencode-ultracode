@@ -109,6 +109,39 @@ export class FifoLimiter {
   }
 }
 
+/** Process-wide exclusive resources (ours): agent(..., { exclusive: "studio" }) waits here, first come first served,
+ *  across every run and every plugin instance, so one live system has one driver at a time. Claude Code's scripts
+ *  hand-rolled this as a promise-chain mutex; here it is built in. The wait happens before a run slot is taken. */
+export class ExclusiveLocks {
+  private locks = new Map<string, { limiter: FifoLimiter; holder: { runId: string; label: string; since: number } | null; waiting: number }>()
+  private lock(key: string) {
+    let l = this.locks.get(key)
+    if (!l) this.locks.set(key, (l = { limiter: new FifoLimiter(1), holder: null, waiting: 0 }))
+    return l
+  }
+  async acquire(key: string, signal: AbortSignal | undefined, who: { runId: string; label: string }) {
+    const l = this.lock(key)
+    l.waiting++
+    try {
+      await l.limiter.acquire(signal)
+    } finally {
+      l.waiting--
+    }
+    l.holder = { ...who, since: Date.now() }
+  }
+  release(key: string) {
+    const l = this.lock(key)
+    l.holder = null
+    l.limiter.release()
+  }
+  status(): Record<string, { holder: { runId: string; label: string; since: number } | null; waiting: number }> {
+    const out: Record<string, any> = {}
+    for (const [k, l] of this.locks) if (l.holder || l.waiting) out[k] = { holder: l.holder, waiting: l.waiting }
+    return out
+  }
+}
+export const exclusiveLocks: ExclusiveLocks = ((globalThis as any).__ultracodeLocks ??= new ExclusiveLocks())
+
 export class AbortError extends Error {
   constructor() {
     super("Workflow aborted")

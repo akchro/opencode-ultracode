@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 $repo = $PSScriptRoot
 $base = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME ".config" }
 $cfg = Join-Path $base "opencode"
-$agents = "ultra.md", "wf-worker.md", "wf-reviewer.md"
+$agents = "ultra.md", "wf-worker.md", "wf-reviewer.md", "wf-operator.md"
 $workflows = Get-ChildItem (Join-Path $repo "workflows") -Filter *.js | ForEach-Object Name
 
 function Write-Lf($path, $text) {

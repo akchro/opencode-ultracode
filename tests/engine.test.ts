@@ -226,6 +226,37 @@ try { while (true) { await agent('step ' + n, { label: 's' + n }); n++ } } catch
     expect(chainKey("", "hello", {})).toBe("v2:" + new Bun.CryptoHasher("sha256").update("\0hello\0{}").digest("hex"))
   })
 
+  test("exclusive agents never overlap, across runs, and do not hold a run slot while they wait", async () => {
+    const live: Record<string, number> = {}
+    const peak: Record<string, number> = {}
+    const order: string[] = []
+    const run: RunAgent = async (req) => {
+      const g = req.label.split(":")[0]
+      live[g] = (live[g] ?? 0) + 1
+      peak[g] = Math.max(peak[g] ?? 0, live[g])
+      order.push(req.label)
+      await new Promise((r) => setTimeout(r, 15))
+      live[g]--
+      return { value: req.label }
+    }
+    const { e } = makeEngine(new FakeAgents(), { runAgent: run, slots: 2 })
+    const script = (tag: string) => `export const meta = { name: 'ex${tag}', description: 'd' }
+return await parallel([
+  () => agent('op1 ${tag}', { label: 'op:${tag}1', exclusive: 'studio-test' }),
+  () => agent('op2 ${tag}', { label: 'op:${tag}2', exclusive: 'studio-test' }),
+  () => agent('free1 ${tag}', { label: 'free:${tag}1' }),
+  () => agent('free2 ${tag}', { label: 'free:${tag}2' }),
+])`
+    const a = e.launch({ script: script("A") })
+    const b = e.launch({ script: script("B") })
+    const [ra, rb] = await Promise.all([e.live.get(a.taskId)!.promise, e.live.get(b.taskId)!.promise])
+    expect(ra.status).toBe("completed")
+    expect(rb.status).toBe("completed")
+    expect(peak.op).toBe(1) // four operators over two runs, one at a time
+    expect(peak.free).toBeGreaterThanOrEqual(2) // the free agents ran beside the waiting operators
+    expect(order.indexOf("free:A1")).toBeLessThan(order.indexOf("op:A2"))
+  })
+
   test("string args are parsed when they hold JSON (the 7-failed-runs fix)", async () => {
     const { e } = makeEngine(new FakeAgents())
     const { rec } = await runIt(e, {

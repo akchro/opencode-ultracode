@@ -6,7 +6,7 @@ repo=$(cd "$(dirname "$0")" && pwd)
 cfg="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 default_agent=0; uninstall=0
 for a in "$@"; do case "$a" in --default-agent) default_agent=1 ;; --uninstall) uninstall=1 ;; esac; done
-agents="ultra.md wf-worker.md wf-reviewer.md"
+agents="ultra.md wf-worker.md wf-reviewer.md wf-operator.md"
 
 if [ "$uninstall" = 1 ]; then
   rm -rf "$cfg/ultracode" "$cfg/plugins/ultracode.ts"

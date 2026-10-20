@@ -1,10 +1,10 @@
 // ultracode for OpenCode 2.x: a code-driven multi-agent workflow engine, modelled on Claude Code's Workflow tool.
 // Tools for the lead: workflow (launch / resume), workflow_status, workflow_stop. Tool for workflow agents: wf_submit.
 // Commands: /ultracode (switch the session to the ultra lead agent and send the task), /ultracode-off.
-import { existsSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
-import { LaunchRejected } from "./core.ts"
+import { dirname, join } from "node:path"
+import { exclusiveLocks, LaunchRejected } from "./core.ts"
 import { Engine } from "./engine.ts"
 import { lastUserText, makeRunAgent, sharedSubmits } from "./opencode.ts"
 
@@ -36,6 +36,40 @@ export function commandPrompt(p: unknown): { text: string; attachments: Record<s
   return { text, attachments }
 }
 
+/** Claude Code compatibility: OpenCode 2.x reads AGENTS.md only. A project that has a CLAUDE.md and no AGENTS.md (in
+ *  it or a parent up to the home folder) gets its CLAUDE.md added to every model request; re-read when it changes. */
+export function claudeMdSource(project: string, home = homedir()): (() => string | null) | null {
+  const file = join(project, "CLAUDE.md")
+  if (!existsSync(file)) return null
+  let dir = project
+  for (let i = 0; i < 64; i++) {
+    if (existsSync(join(dir, "AGENTS.md"))) return null
+    const up = dirname(dir)
+    if (up === dir || dir.toLowerCase() === home.toLowerCase()) break
+    dir = up
+  }
+  let cached = { mtime: -1, text: "" }
+  return () => {
+    try {
+      const m = statSync(file).mtimeMs
+      if (m !== cached.mtime) cached = { mtime: m, text: readFileSync(file, "utf8") }
+      return `Instructions from: ${file.replace(/\\/g, "/")} (this project's CLAUDE.md, loaded by the ultracode plugin)\n${cached.text}`
+    } catch {
+      return null
+    }
+  }
+}
+
+/** Appends an instruction block to a context hook's system prompt, whatever shape it has. */
+export function addSystem(event: any, block: string) {
+  const s = event.system
+  if (Array.isArray(s)) {
+    if (s.length && typeof s[0] === "object" && s[0] && "text" in s[0]) s.push({ ...s[0], text: block })
+    else s.push(block)
+  } else if (typeof s === "string") event.system = s + "\n\n" + block
+  else event.system = [block]
+}
+
 const configDir = () => join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "opencode")
 
 function summarise(rec: Record<string, any> | { live: true; progress: any[]; logs: string[] }) {
@@ -53,7 +87,7 @@ function summarise(rec: Record<string, any> | { live: true; progress: any[]; log
 export default {
   id: "ultracode",
   async setup(ctx: any) {
-    const opts = (ctx.options ?? {}) as { slots?: number; home?: string; workerAgent?: string; nudges?: number }
+    const opts = (ctx.options ?? {}) as { slots?: number; home?: string; workerAgent?: string; nudges?: number; claudeMd?: boolean }
     const home = opts.home ?? join(homedir(), ".local", "share", "opencode", "ultracode")
     const project: string = ctx.location?.directory ?? process.cwd()
     const submits = sharedSubmits
@@ -131,7 +165,7 @@ export default {
             const rec = JSON.parse(readFileSync(join(dir, f), "utf8"))
             return { taskId: rec.taskId, runId: rec.runId, workflow: rec.workflowName, status: rec.status, minutes: Math.round(rec.durationMs / 600) / 100, ...summarise(rec) }
           }) : []
-          return { content: JSON.stringify({ live, recent: done }, null, 1) }
+          return { content: JSON.stringify({ live, recent: done, locks: exclusiveLocks.status() }, null, 1) }
         },
       })
       editor.add({
@@ -155,6 +189,14 @@ export default {
         },
       })
     })
+
+    const claudeMd = opts.claudeMd === false ? null : claudeMdSource(project)
+    if (claudeMd && ctx.session?.hook) {
+      ctx.session.hook("context", (event: any) => {
+        const block = claudeMd()
+        if (block) addSystem(event, block)
+      })
+    }
 
     ctx.command.transform((editor: any) => {
       editor.add({

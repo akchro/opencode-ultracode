@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Engine, type RunAgent } from "../src/engine.ts"
 import { lastAssistantText, makeRunAgent, modelRef, SubmitRegistry } from "../src/opencode.ts"
-import plugin from "../src/plugin.ts"
+import plugin, { addSystem, claudeMdSource } from "../src/plugin.ts"
 
 const WF = join(import.meta.dir, "..", "workflows")
 
@@ -153,6 +153,61 @@ describe("plugin", () => {
   })
 })
 
+describe("CLAUDE.md compatibility", () => {
+  const { mkdirSync, writeFileSync } = require("node:fs")
+  test("a project with CLAUDE.md and no AGENTS.md gets it; AGENTS.md here or in a parent wins", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ucm-"))
+    const proj = join(root, "proj")
+    mkdirSync(proj)
+    writeFileSync(join(proj, "CLAUDE.md"), "Playtest with AcHeadless.")
+    const src = claudeMdSource(proj, root)!
+    expect(src()).toContain("Playtest with AcHeadless.")
+    await new Promise((r) => setTimeout(r, 20))
+    writeFileSync(join(proj, "CLAUDE.md"), "Changed rules.")
+    expect(src()).toContain("Changed rules.")
+    writeFileSync(join(root, "AGENTS.md"), "parent agents")
+    expect(claudeMdSource(proj, tmpdir())).toBeNull()
+    const proj2 = join(root, "proj2")
+    mkdirSync(proj2)
+    expect(claudeMdSource(proj2, root)).toBeNull() // no CLAUDE.md at all
+  })
+
+  test("the context hook appends the block whatever shape the system prompt has", () => {
+    const a: any = { system: ["base"] }
+    addSystem(a, "X")
+    expect(a.system).toEqual(["base", "X"])
+    const b: any = { system: "base" }
+    addSystem(b, "X")
+    expect(b.system).toBe("base\n\nX")
+    const c: any = { system: [{ type: "text", text: "base", cache: true }] }
+    addSystem(c, "X")
+    expect(c.system[1]).toEqual({ type: "text", text: "X", cache: true })
+    const d: any = {}
+    addSystem(d, "X")
+    expect(d.system).toEqual(["X"])
+  })
+
+  test("the plugin registers the hook only for a CLAUDE.md project", async () => {
+    const proj = mkdtempSync(join(tmpdir(), "ucq-"))
+    writeFileSync(join(proj, "CLAUDE.md"), "rules")
+    const hooks: any[] = []
+    const base = (dir: string) => ({
+      options: { home: mkdtempSync(join(tmpdir(), "ucp-")) }, location: { directory: dir },
+      model: { default: async () => ({ providerID: "p", id: "m" }) },
+      tool: { transform: () => {} }, command: { transform: () => {} },
+      session: { hook: (name: string, fn: any) => hooks.push([name, fn]) },
+    })
+    await plugin.setup(base(proj))
+    expect(hooks.map((h) => h[0])).toEqual(["context"])
+    const ev: any = { system: ["s"] }
+    hooks[0][1](ev)
+    expect(ev.system[1]).toContain("rules")
+    hooks.length = 0
+    await plugin.setup(base(mkdtempSync(join(tmpdir(), "ucr-"))))
+    expect(hooks.length).toBe(0)
+  })
+})
+
 describe("saved harnesses", () => {
   function fakeAgents(byLabel: (label: string, agentType?: string) => unknown) {
     const seen: Array<{ label: string; agentType?: string }> = []
@@ -210,6 +265,39 @@ describe("saved harnesses", () => {
     expect(research.result.topics.map((t: any) => t.key)).toEqual(["connections", "placement"])
     expect(research.result.gaps).toBe("no gaps")
     expect(seen.filter((s) => s.label.startsWith("trace:")).every((s) => s.agentType === undefined)).toBe(true)
+  })
+
+  test("live-verify: the operator runs the checks, the judge can overturn a pass, blocked and dead operators", async () => {
+    const checks = [
+      { key: "spawn", how: "start Play, read the spawn position", expect: "player spawns within 5 studs of SpawnPad" },
+      { key: "errors", how: "read the console for 20 s", expect: "no errors" },
+    ]
+    const report = (over: any = {}) => ({
+      blocked: "", consoleErrors: [], restored: true, notes: "",
+      checks: [
+        { key: "spawn", pass: true, measured: "2.1 studs", evidence: "Players.x.Character position vs SpawnPad.Position" },
+        { key: "errors", pass: true, measured: "looks fine", evidence: "" },
+      ], ...over,
+    })
+    let a = fakeAgents((label) => label === "operate" ? report() : { verdicts: [{ key: "spawn", agree: true, reason: "measured" }, { key: "errors", agree: false, reason: "no evidence" }] })
+    let rec = await launch(a.run, { name: "live-verify", args: { context: "brick placement change", checks } })
+    expect(rec.status).toBe("completed")
+    expect(a.seen.map((s) => [s.label, s.agentType])).toEqual([["operate", "wf-operator"], ["judge", "wf-reviewer"]])
+    expect(rec.result.status).toBe("fail")
+    expect(rec.result.checks.map((c: any) => c.status)).toEqual(["pass", "pass claimed, judge disagrees"])
+
+    a = fakeAgents(() => report({ blocked: "a playtest is running" }))
+    rec = await launch(a.run, { name: "live-verify", args: { context: "c", checks } })
+    expect(rec.result.status).toBe("blocked")
+    expect(a.seen.length).toBe(1)
+
+    a = fakeAgents(() => null)
+    rec = await launch(a.run, { name: "live-verify", args: { context: "c", checks } })
+    expect(rec.result.status).toBe("failed")
+
+    a = fakeAgents((label) => label === "operate" ? report({ checks: [{ key: "spawn", pass: true, measured: "1", evidence: "e" }] }) : { verdicts: [{ key: "spawn", agree: true, reason: "ok" }] })
+    rec = await launch(a.run, { name: "live-verify", args: { context: "c", checks, judge: true } })
+    expect(rec.result.status).toBe("partial")
   })
 
   test("design-panel loads, and refuses a missing brief inside the run", async () => {
